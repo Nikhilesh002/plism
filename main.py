@@ -201,7 +201,7 @@ def prepareResults():
     rows = [[hacker, hacker_percentage[hacker], hacker_url[hacker]] for hacker in topHackers]
     filename = "plism_results.csv"
 
-    with open(filename, 'w') as csvfile:
+    with open(filename, 'w', newline='') as csvfile:
         csvwriter = csv.writer(csvfile)
         csvwriter.writerow(fields)
         csvwriter.writerows(rows)

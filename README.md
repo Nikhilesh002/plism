@@ -2,7 +2,7 @@
 
 1. Public Solutions (under settings of each challenge in hackerrank)
 2. Register for moss and download the script https://theory.stanford.edu/~aiken/moss/
-3. Put your moss script in moss.pl
+3. Paste your moss script in moss.pl
 4. Set the variables CONTEST_SLUG, CHALLENGE_SLUG, and CUTOFF_LIMIT (descs in code)
 5. Run the code
 6. You should receive a csv of this form, with leaderboard along with their highest plag percentages (generally further inspection is required if its >= 60%)
