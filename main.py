@@ -10,14 +10,15 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 import asyncio
 import aiohttp
+import glob
 
-CONTEST_SLUG = "turing-cup-2k23-round-1" # find in the contest URL
-CHALLENGE_SLUGS = ["chain-beads"] # find in the challenge URL
+CONTEST_SLUG = "code-frenzy-2k24-welcome" # find in the contest URL
+CHALLENGE_SLUGS = ["the-shopkeeper"] # find in the challenge URL
 CUTOFF_LIMIT = 100 # up to what rank should be in the plag report
 
 # ==================================================================================================
 
-# adding retry nd backoff to avoid Max retries exceeded with url / connection denied errors
+# adding retry and backoff to avoid Max retries exceeded with url / connection denied errors
 session = requests.Session()
 retry = Retry(connect=3, backoff_factor=0.5)
 adapter = HTTPAdapter(max_retries=retry)
@@ -54,7 +55,7 @@ async def saveSubmissionFiles(challenge, submissions):
     async with aiohttp.ClientSession(connector=connector) as session:
         tasks = []
         for lang in submissions:
-            os.makedirs(challenge + "/" + lang, exist_ok=True)    
+            os.makedirs(challenge + "/" + lang, exist_ok=True)
             usernames = submissions[lang]
             for username in usernames:
                 filename = "{}/{}/{}".format(challenge, lang, username)
@@ -62,7 +63,6 @@ async def saveSubmissionFiles(challenge, submissions):
                 task = download_and_write(session, url, filename)
                 tasks.append(task)
         await asyncio.gather(*tasks)
-
 
 def getPrblmSubmissions(contest_slug, challenge_slug):
     submissions = defaultdict(lambda: [])
@@ -87,11 +87,9 @@ def getPrblmSubmissions(contest_slug, challenge_slug):
             submissions[langKey].append(username)
 
         offset += 20
-
-    asyncio.run(saveSubmissionFiles(challenge, submissions))
+    asyncio.run(saveSubmissionFiles(challenge_slug, submissions))
     
     return submissions
-
 
 def getTopHackers():
     # fetches the CUTOFF_LIMIT number of hackers from leaderboard
@@ -114,19 +112,26 @@ def getTopHackers():
 #     return moss_urls
 
 async def runPlagCheckForAll(challenge, langs):
-    moss_urls = ["http://moss.stanford.edu/results/3/7051883657436/"]
-    # for lang in langs:
-    #     result = subprocess.run("moss -l {lang} {challenge}/{lang}/*".format(challenge=challenge, lang=lang), shell=True, capture_output=True) 
-    #     if result.stderr:
-    #         print(result.stderr.decode('utf8'))
-    #         exit(1)
+    moss_urls = []
+    for lang in langs:
+        file_paths = glob.glob(f"{challenge}/{lang}/*")
+        if not file_paths:
+            print(f"No files found for language {lang} in challenge {challenge}")
+            continue
         
-    #     pattern = r'\n(.*?)\n$'
-    #     match = re.search(pattern, result.stdout.decode('utf8'))
-    #     if match:
-    #         url = match.group(1)
-    #         moss_urls.append(url)
-    #         print(lang, url)
+        files_str = ' '.join(file_paths)
+        result = subprocess.run("perl moss.pl -l {lang} {files_str}".format(files_str=files_str, lang=lang), shell=True, capture_output=True)
+        if result.stderr:
+            print(result.stderr.decode('utf8'))
+            exit(1)
+        
+        pattern = r'\n(.*?)\n$'
+        match = re.search(pattern, result.stdout.decode('utf8'))
+        if match:
+            url = match.group(1)
+            moss_urls.append(url)
+            print(lang, url)
+
     connector = aiohttp.TCPConnector(limit=500) 
     async with aiohttp.ClientSession(connector=connector) as session:
         tasks = []
@@ -138,7 +143,7 @@ async def runPlagCheckForAll(challenge, langs):
 hacker_url = defaultdict(lambda: "")
 hacker_percentage = defaultdict(lambda: 0)
 
-async def parseMoss(session, url):  
+async def parseMoss(session, url):
     url_pattern = r"http://moss\.stanford\.edu/results/\d+/\d+"
     if not re.match(url_pattern, url):
         return
@@ -147,33 +152,59 @@ async def parseMoss(session, url):
         html_content = await response.text()
         soup = BeautifulSoup(html_content, "html.parser")
         table = soup.find("table")
+        # print("table = ",table)
 
-        for row in table.find_all("tr"):
-            for cell in row.find_all("td"):
-                cell_text = cell.get_text()
-                pattern = r"/(\w+) \((\d+)%\)"
-                match = re.search(pattern, cell_text)
-                if match:
-                    hacker = match[1]
-                    percentage = int(match[2])
-                    cell_url = cell.a["href"]
-                    if percentage > hacker_percentage[hacker]:
-                        hacker_percentage[hacker] = percentage
-                        hacker_url[hacker] = cell_url
+        if not table:
+            print(f"No table found at URL: {url}")
+            return
 
+        for row in table.find_all("tr")[1:]:  # Skip header row
+            cells = row.find_all("td")
+            # print("cells = ",cells)
+            if len(cells) < 3:
+                continue
+
+            first_cell_text = cells[0].get_text(separator=" ")
+            second_cell_text = cells[1].get_text(separator=" ")
+            first_url = cells[0].a["href"]
+            second_url = cells[1].a["href"]
+
+            pattern = r"\\([^\\]+) \((\d+)%\)"
+            first_match = re.search(pattern, first_cell_text)
+            second_match = re.search(pattern, second_cell_text)
+
+            # print("first_cell_text:", first_cell_text)
+            # print("second_cell_text:", second_cell_text)
+            # print("first_url:", first_url)
+            # print("second_url:", second_url)
+
+            if first_match:
+                hacker = first_match.group(1)
+                percentage = int(first_match.group(2))
+                if percentage > hacker_percentage[hacker]:
+                    hacker_percentage[hacker] = percentage
+                    hacker_url[hacker] = first_url
+
+            if second_match:
+                hacker = second_match.group(1)
+                percentage = int(second_match.group(2))
+                if percentage > hacker_percentage[hacker]:
+                    hacker_percentage[hacker] = percentage
+                    hacker_url[hacker] = second_url
+
+        print(f"Processed Moss results from {url}")
 
 def prepareResults():
     topHackers = getTopHackers()
 
-    fields = ['Hacker', 'Max %', 'Corresp. Moss URL'] 
+    fields = ['Hacker', 'Max %', 'Corresp. Moss URL']
     rows = [[hacker, hacker_percentage[hacker], hacker_url[hacker]] for hacker in topHackers]
     filename = "plism_results.csv"
 
-    with open(filename, 'w') as csvfile: 
-        csvwriter = csv.writer(csvfile) 
-        csvwriter.writerow(fields) 
+    with open(filename, 'w') as csvfile:
+        csvwriter = csv.writer(csvfile)
+        csvwriter.writerow(fields)
         csvwriter.writerows(rows)
-
 
 if __name__ == '__main__':
     challenges = CHALLENGE_SLUGS
@@ -184,15 +215,11 @@ if __name__ == '__main__':
         print("fetching submissions...")
         submissions = getPrblmSubmissions(CONTEST_SLUG, challenge)
         print("download of submissions complete...")
-        
+
         print("running moss check...")
         asyncio.run(runPlagCheckForAll(challenge, submissions.keys()))
-        print("moss check complete...")        
+        print("moss check complete...")
         print("=====================\n")
-    
-    # prepareResults()
+
+    prepareResults()
     print("plism ended successfully!")
-
-
-
-
